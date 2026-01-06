@@ -1,3 +1,5 @@
+from flask import Flask
+import threading
 import telebot
 import pandas as pd
 import pandas_ta as ta
@@ -5,16 +7,29 @@ import yfinance as download
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import os
-import threading
 import time
 
-# আপনার টোকেন এবং প্রাইভেট চ্যানেল আইডি
+# --- Render Port Error ঠিক করার জন্য Flask অংশ ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "ZM 24H BOT IS ALIVE!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+
+# Flask ব্যাকগ্রাউন্ডে চালু করা
+threading.Thread(target=run_flask).start()
+# ---------------------------------------------
+
+# আপনার দেওয়া টোকেন এবং প্রাইভেট চ্যানেল আইডি
 TOKEN = "8358085571:AAE5YRznsq9FpoW_JI9hxqluXdK6uah8JO8"
 CHAT_ID = "-1003401012164"
 
 bot = telebot.TeleBot(TOKEN)
 
-# আপনার দেওয়া সব মার্কেট লিস্ট (Real Market format for yfinance)
+# মার্কেটের তালিকা
 pairs = [
     'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'USDCHF=X', 'AUDUSD=X', 'USDCAD=X',
     'NZDUSD=X', 'EURGBP=X', 'EURJPY=X', 'GBPJPY=X', 'AUDJPY=X', 'EURCHF=X',
@@ -30,23 +45,14 @@ def check_result(symbol, entry_price, action):
         exit_price = data.iloc[-1]['Close']
         win = (exit_price > entry_price) if "CALL" in action else (exit_price < entry_price)
         res_text = "✅ WIN (PROFIT)" if win else "❌ LOSS"
-        
         bot.send_message(CHAT_ID, f"📊 **RESULT: {symbol.replace('=X', '')}**\n🏆 Status: {res_text}")
     except: pass
 
 def send_auto_signal(pair, action, data):
     try:
-        recent_data = data.tail(30)
         plt.figure(figsize=(6, 4))
-        plt.plot(recent_data['Close'], color='#2196F3', linewidth=1.5)
-        
-        # SNR লাইন
-        support = recent_data['Low'].min()
-        resistance = recent_data['High'].max()
-        plt.axhline(y=support, color='green', linestyle='--', alpha=0.5)
-        plt.axhline(y=resistance, color='red', linestyle='--', alpha=0.5)
-        
-        chart_path = "multi_signal.png"
+        plt.plot(data['Close'].tail(30), color='#2196F3', linewidth=1.5)
+        chart_path = "signal.png"
         plt.savefig(chart_path, dpi=80)
         plt.close()
 
@@ -56,14 +62,12 @@ def send_auto_signal(pair, action, data):
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📊 Asset: {pair.replace('=X', '')}\n"
             f"🎯 Action: {action}\n"
-            f"⚡ Accuracy: 98% (SNR + RSI)\n"
             f"⏰ Entry: {now.strftime('%H:%M:%S')}\n"
             f"⌛ Expiry: 1 MIN\n"
             f"━━━━━━━━━━━━━━━━━━"
         )
         with open(chart_path, 'rb') as photo:
             bot.send_photo(CHAT_ID, photo, caption=msg)
-        
         if os.path.exists(chart_path): os.remove(chart_path)
         threading.Thread(target=check_result, args=(pair, data['Close'].iloc[-1], action)).start()
     except Exception as e: print(f"Signal Error: {e}")
@@ -72,19 +76,14 @@ def scanner_loop():
     while True:
         for pair in pairs:
             try:
-                # ১ মিনিটের ডাটা ফেচিং
                 data = download.download(pair, period='1d', interval='1m', progress=False)
                 if data.empty: continue
-
                 data['RSI'] = ta.rsi(data['Close'], length=5)
                 rsi_val = data['RSI'].iloc[-1]
                 
                 action = None
-                # রিফাইন ফিল্টার (শুধুমাত্র সেরা এন্ট্রি)
-                if rsi_val < 15:
-                    action = "CALL (UP) ⬆️"
-                elif rsi_val > 85:
-                    action = "PUT (DOWN) ⬇️"
+                if rsi_val < 15: action = "CALL (UP) ⬆️"
+                elif rsi_val > 85: action = "PUT (DOWN) ⬇️"
 
                 if action:
                     send_auto_signal(pair, action, data)
@@ -92,11 +91,9 @@ def scanner_loop():
             except: continue
         time.sleep(30)
 
-# অনলাইন কনফার্মেশন
 try:
-    bot.send_message(CHAT_ID, "✅ **ZM 24H MASTER BOT IS ONLINE!**\nসবগুলো মার্কেট পেয়ার (Real & Stocks) এখন স্ক্যান করা হচ্ছে।")
-except:
-    print("Error: বট চ্যানেলে অ্যাডমিন নয় অথবা আইডি ভুল।")
+    bot.send_message(CHAT_ID, "✅ **ZM 24H MASTER BOT IS ONLINE (FREE MODE)!**")
+except: pass
 
 threading.Thread(target=scanner_loop, daemon=True).start()
 bot.polling(none_stop=True)
