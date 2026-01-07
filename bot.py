@@ -5,72 +5,38 @@ import pandas as pd
 import pandas_ta as ta
 import yfinance as download
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+from datetime import datetime
 import os
 import time
 
 # --- Render Port Error ঠিক করার জন্য Flask অংশ ---
 app = Flask('')
-
 @app.route('/')
-def home():
-    return "ZM 24H BOT IS ALIVE!"
-
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
-
-# Flask ব্যাকগ্রাউন্ডে চালু করা
+def home(): return "BOT IS ALIVE!"
+def run_flask(): app.run(host='0.0.0.0', port=8080)
 threading.Thread(target=run_flask).start()
-# ---------------------------------------------
 
-# আপনার দেওয়া টোকেন এবং প্রাইভেট চ্যানেল আইডি
+# --- আপনার সেটিংস ---
 TOKEN = "8358085571:AAE5YRznsq9FpoW_JI9hxqluXdK6uah8JO8"
 CHAT_ID = "-1003401012164"
-
 bot = telebot.TeleBot(TOKEN)
 
-# মার্কেটের তালিকা
-pairs = [
-    'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'USDCHF=X', 'AUDUSD=X', 'USDCAD=X',
+# দ্রুত সিগন্যালের জন্য RSI লেভেল পরিবর্তন (৩০ এবং ৭০)
+RSI_BUY = 30 
+RSI_SELL = 70
+
+pairs = ['EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'USDCHF=X', 'AUDUSD=X', 'USDCAD=X',
     'NZDUSD=X', 'EURGBP=X', 'EURJPY=X', 'GBPJPY=X', 'AUDJPY=X', 'EURCHF=X',
-    'GBPCHF=X', 'NZDJPY=X', 'CADJPY=X', 'CHFJPY=X', 'AUDCAD=X', 'AUDCHF=X',
-    'AUDNZD=X', 'CADCHF=X', 'BTC-USD', 'ETH-USD', 'MSFT', 'AAPL', 'GOOGL',
-    'FB', 'INTC', 'PFE', 'JNJ', 'BA', 'MCD'
-]
+    'GBPCHF=X', 'NZDJPY=X', 'CADJPY=X', 'CHFJPY=X', 'AUDCAD=X', 'AUDCHF=X',]
 
-def check_result(symbol, entry_price, action):
-    time.sleep(62)
-    try:
-        data = download.download(symbol, period='1d', interval='1m', progress=False)
-        exit_price = data.iloc[-1]['Close']
-        win = (exit_price > entry_price) if "CALL" in action else (exit_price < entry_price)
-        res_text = "✅ WIN (PROFIT)" if win else "❌ LOSS"
-        bot.send_message(CHAT_ID, f"📊 **RESULT: {symbol.replace('=X', '')}**\n🏆 Status: {res_text}")
-    except: pass
-
-def send_auto_signal(pair, action, data):
-    try:
-        plt.figure(figsize=(6, 4))
-        plt.plot(data['Close'].tail(30), color='#2196F3', linewidth=1.5)
-        chart_path = "signal.png"
-        plt.savefig(chart_path, dpi=80)
-        plt.close()
-
-        now = datetime.now()
-        msg = (
-            f"🚀 **ALL MARKET AUTO SIGNAL** 🚀\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"📊 Asset: {pair.replace('=X', '')}\n"
-            f"🎯 Action: {action}\n"
-            f"⏰ Entry: {now.strftime('%H:%M:%S')}\n"
-            f"⌛ Expiry: 1 MIN\n"
-            f"━━━━━━━━━━━━━━━━━━"
-        )
-        with open(chart_path, 'rb') as photo:
-            bot.send_photo(CHAT_ID, photo, caption=msg)
-        if os.path.exists(chart_path): os.remove(chart_path)
-        threading.Thread(target=check_result, args=(pair, data['Close'].iloc[-1], action)).start()
-    except Exception as e: print(f"Signal Error: {e}")
+def get_chart(pair, data):
+    plt.figure(figsize=(6, 4))
+    plt.plot(data['Close'].tail(20), color='#2196F3', linewidth=2)
+    plt.title(f"{pair} Live Chart")
+    path = f"{pair}.png"
+    plt.savefig(path)
+    plt.close()
+    return path
 
 def scanner_loop():
     while True:
@@ -78,21 +44,42 @@ def scanner_loop():
             try:
                 data = download.download(pair, period='1d', interval='1m', progress=False)
                 if data.empty: continue
-                data['RSI'] = ta.rsi(data['Close'], length=5)
+                
+                data['RSI'] = ta.rsi(data['Close'], length=7)
                 rsi_val = data['RSI'].iloc[-1]
                 
+                # সিগন্যাল কন্ডিশন চেক
                 action = None
-                if rsi_val < 15: action = "CALL (UP) ⬆️"
-                elif rsi_val > 85: action = "PUT (DOWN) ⬇️"
+                if rsi_val <= RSI_BUY: action = "CALL (UP) ⬆️"
+                elif rsi_val >= RSI_SELL: action = "PUT (DOWN) ⬇️"
 
                 if action:
-                    send_auto_signal(pair, action, data)
-                    time.sleep(120) 
-            except: continue
-        time.sleep(30)
+                    # ১. প্রথমে READY মেসেজ পাঠানো
+                    bot.send_message(CHAT_ID, f"⏳ **READY FOR NEXT MINUTE!**\n📊 Asset: {pair.replace('=X', '')}\n🎯 Action: {action}\nপজিশন নেওয়ার জন্য প্রস্তুত হোন।")
+                    time.sleep(50) # ১০ সেকেন্ড বাকি থাকতে সিগন্যাল দিবে
 
+                    # ২. চার্টসহ মেইন সিgন্যাল পাঠানো
+                    chart_path = get_chart(pair, data)
+                    msg = (
+                        f"🚀 **NEW SIGNAL ALERT** 🚀\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 Asset: {pair.replace('=X', '')}\n"
+                        f"🎯 Action: {action}\n"
+                        f"⌛ Expiry: 1 MIN\n"
+                        f"━━━━━━━━━━━━━━━━━━"
+                    )
+                    with open(chart_path, 'rb') as photo:
+                        bot.send_photo(CHAT_ID, photo, caption=msg)
+                    if os.path.exists(chart_path): os.remove(chart_path)
+                    
+                    time.sleep(120) # একই পেয়ারে বারবার সিগন্যাল এড়াতে ২ মিনিট বিরতি
+            except Exception as e:
+                print(f"Error: {e}")
+        time.sleep(10)
+
+# বট চালু হওয়ার মেসেজ
 try:
-    bot.send_message(CHAT_ID, "✅ **ZM 24H MASTER BOT IS ONLINE (FREE MODE)!**")
+    bot.send_message(CHAT_ID, "✅ **ZM 24H MASTER BOT IS UPDATED!**\nএখন সিগন্যাল আরও দ্রুত আসবে এবং চার্ট ও রেডি মেসেজ দেখাবে।")
 except: pass
 
 threading.Thread(target=scanner_loop, daemon=True).start()
